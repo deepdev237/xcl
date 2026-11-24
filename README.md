@@ -135,6 +135,12 @@ xcl rpf D:\data\shaders.rpf --extract NAME --out folder
   `null` if its format cannot be decoded. Intermediate render-target dumps do not update it.
   Sampling uses every fourth pixel in each direction (`XCL_FRAME_DUMP_FULL=1`: every pixel).
   A coarse sample can miss detail; a non-dark sample does not establish correct rendering or gameplay.
+- `XCL_TRACE_INDIRECT_BARRIERS=145` starts logging after the given number of seconds (0 for
+  startup). It traces enhanced buffer barriers in slot #146 with access bit `0x200` (indirect
+  arguments or predication) and calls forwarded to the PC's `ExecuteIndirect`. Match the title
+  list and resource across entries and use the PC list for DRED breadcrumbs. The trace records CPU
+  metadata, including title and PC offsets for argument and count buffers. Barrier and command
+  streams each cap at 2048 entries.
 - Title data: `%LOCALAPPDATA%\XCL\<title>\` (`%XCL_DATA_ROOT%`): `xcl.toml`, `overlay\`, `saves\`,
   `pls\` (the title's `S:\`), `temp\` (`T:\`), `cache\`, `logs\xcl.log`, `logs\report.json` (the
   previous run's: `xcl.prev.log`, `report.prev.json`).

@@ -2699,7 +2699,8 @@ pub(super) unsafe extern "system" fn dispatch_x(this: *mut c_void, x: u32, y: u3
 
 /// command list #146 console compute/UAV barrier (used by `XboxBvhBuilder.dll` between BVH
 /// build passes): emits a global UAV barrier so UMA writes become visible to the next pass
-pub(super) unsafe extern "system" fn uav_barrier_x(this: *mut c_void, _n: u32, _barriers: *const c_void) {
+pub(super) unsafe extern "system" fn uav_barrier_x(this: *mut c_void, n: u32, barriers: *const c_void) {
+    super::indirect_barrier_trace::enhanced_barriers(this, n, barriers);
     let b = D3D12_RESOURCE_BARRIER {
         Type: D3D12_RESOURCE_BARRIER_TYPE_UAV,
         Flags: D3D12_RESOURCE_BARRIER_FLAG_NONE,

@@ -237,6 +237,8 @@ pub(super) unsafe extern "system" fn execute_indirect(this: *mut c_void, sig: us
     let pc: F = std::mem::transmute(super::real::orig_fn(this, 59));
     let pso = super::pso_async::resolve_wait(with(this, |s| s.pso));
     let (gfx, compute) = (super::real::is_translated_graphics(pso), super::real::is_translated_compute(pso));
+    let title_args_off = args_off;
+    let title_count_off = count_off;
     let (args_off, count_off) = (args_off + super::real::buffer_delta(args), count_off + super::real::buffer_delta(count_buf));
     if !gfx && !compute {
         // A pipeline still being built (or whose build failed): its stand-in draws nothing, and
@@ -257,6 +259,7 @@ pub(super) unsafe extern "system" fn execute_indirect(this: *mut c_void, sig: us
         if let (Some(list), Some(r)) = (ID3D12GraphicsCommandList::from_raw_borrowed(&this), ID3D12RootSignature::from_raw_borrowed(&rs)) {
             list.SetGraphicsRootSignature(r);
         }
+        super::indirect_barrier_trace::execute(this, args, title_args_off, args_off, max, count_buf, title_count_off, count_off);
         return pc(this, sig, max, args, args_off, count_buf, count_off);
     }
     if ROOT_SIGNATURES.lock().unwrap().as_ref().is_some_and(|s| s.contains(&sig)) {
@@ -270,6 +273,7 @@ pub(super) unsafe extern "system" fn execute_indirect(this: *mut c_void, sig: us
     match bind_abi(this, list, pso, gfx) {
         Ok(()) => {
             count(if gfx { DRAWS } else { DISPATCHES });
+            super::indirect_barrier_trace::execute(this, args, title_args_off, args_off, max, count_buf, title_count_off, count_off);
             pc(this, sig, max, args, args_off, count_buf, count_off)
         }
         Err(e) => {
@@ -1052,6 +1056,7 @@ mod tests {
         set_compute_uav_calls: AtomicUsize,
         set_pso_calls: AtomicUsize,
         execute_indirect_calls: AtomicUsize,
+        indirect_offsets: Mutex<Option<(u64, u64)>>,
     }
 
     unsafe extern "system" fn fake_add_ref(this: *mut c_void) -> u32 {
@@ -1083,11 +1088,13 @@ mod tests {
         _sig: usize,
         _max: u32,
         _args: usize,
-        _args_off: u64,
+        args_off: u64,
         _count_buf: usize,
-        _count_off: u64,
+        count_off: u64,
     ) {
-        (*(this as *const FakeAdoptedList)).execute_indirect_calls.fetch_add(1, Ordering::Relaxed);
+        let list = &*(this as *const FakeAdoptedList);
+        *list.indirect_offsets.lock().unwrap() = Some((args_off, count_off));
+        list.execute_indirect_calls.fetch_add(1, Ordering::Relaxed);
     }
 
     #[test]
@@ -1116,6 +1123,7 @@ mod tests {
             set_compute_uav_calls: AtomicUsize::new(0),
             set_pso_calls: AtomicUsize::new(0),
             execute_indirect_calls: AtomicUsize::new(0),
+            indirect_offsets: Mutex::new(None),
         });
         let list_ptr = &*fake as *const FakeAdoptedList as *mut c_void;
 
@@ -1139,11 +1147,12 @@ mod tests {
         assert!(real::is_translated_compute(real_ok));
 
         reset(list_ptr, 0x7200_0100, standin_ok);
-        unsafe {
+        let skipped = super::super::indirect_barrier_trace::capture(|| unsafe {
             // With `sig_root_changing`, a translated compute PSO is caught by the root-changing
             // guard instead of falling through to `pc` (which happened when `R` wasn't registered).
             execute_indirect(list_ptr, sig_root_changing, 1, 0, 0, 0, 0);
-        }
+        });
+        assert!(skipped.is_empty());
         assert_eq!(
             fake.execute_indirect_calls.load(Ordering::Relaxed),
             0,
@@ -1171,9 +1180,19 @@ mod tests {
         assert_eq!(fake.set_pso_calls.load(Ordering::Relaxed), 0);
         assert_eq!(fake.dispatch_calls.load(Ordering::Relaxed), 0);
 
-        unsafe {
-            execute_indirect(list_ptr, sig_root_changing, 1, 0, 0, 0, 0);
-        }
+        let args = 0x7200_0200;
+        let count_buf = 0x7200_0300;
+        real::set_test_buffer_delta(args, Some(0x100));
+        real::set_test_buffer_delta(count_buf, Some(0x200));
+        let forwarded = super::super::indirect_barrier_trace::capture(|| unsafe {
+            execute_indirect(list_ptr, sig_root_changing, 1, args, 0x40, count_buf, 0x4);
+        });
+        real::set_test_buffer_delta(args, None);
+        real::set_test_buffer_delta(count_buf, None);
+        assert_eq!(*fake.indirect_offsets.lock().unwrap(), Some((0x140, 0x204)));
+        assert_eq!(forwarded.len(), 1);
+        assert!(forwarded[0].contains("resource=0x72000200 title_offset=0x40 pc_offset=0x140"));
+        assert!(forwarded[0].contains("count_buffer=0x72000300 title_count_offset=0x4 pc_count_offset=0x204"));
         assert_eq!(fake.set_compute_rs_calls.load(Ordering::Relaxed), 0);
         assert_eq!(fake.set_compute_uav_calls.load(Ordering::Relaxed), 0);
         assert_eq!(fake.set_pso_calls.load(Ordering::Relaxed), 0);

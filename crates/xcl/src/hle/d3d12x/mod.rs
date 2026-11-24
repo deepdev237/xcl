@@ -11,6 +11,7 @@
 
 mod alloc_pool;
 pub mod bind;
+mod indirect_barrier_trace;
 pub mod console_heap;
 pub mod console_list;
 pub mod device_x;
